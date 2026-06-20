@@ -3451,6 +3451,23 @@ static void vop2_crtc_load_lut(struct drm_crtc *crtc)
 	if (!vop2->is_enabled || !vp->lut || !vop2->lut_regs)
 		return;
 
+	/*
+	 * RK3568 VOP2 has a single shared hardware gamma LUT selected by
+	 * gamma_port_sel (LUT_PORT_SEL). It can only serve one video port at a
+	 * time: enabling per-CRTC gamma on more than one connected output
+	 * (e.g. HDMI on VP0 and DSI on VP1) points the port at one VP and
+	 * blanks the other, which shows up as an intermittent black screen
+	 * once the desktop pushes a gamma update at login.
+	 *
+	 * Restrict the hardware LUT to VP0 (the primary HDMI output): load_lut
+	 * is a no-op for any other VP, so gamma_port_sel stays at 0 and the
+	 * secondary VPs keep dsp_lut_en clear and cleanly bypass the LUT instead
+	 * of going black. HDMI retains hardware color management while DSI (and
+	 * any other VP) is driven without the LUT.
+	 */
+	if (vp->id != 0)
+		return;
+
 	if (WARN_ON(!drm_modeset_is_locked(&crtc->mutex)))
 		return;
 
