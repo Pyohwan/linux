@@ -2429,6 +2429,21 @@ static int rockchip_drm_bind(struct device *dev)
 	struct rockchip_drm_private *private;
 	struct drm_encoder *encoder;
 	int ret;
+	/*
+	 * Break a probe-defer livelock. When a connected output (e.g. a DSI
+	 * panel) has not been probed yet, component_bind_all() below returns
+	 * -EPROBE_DEFER only after doing the (expensive) bind of the other
+	 * components (VOP, HDMI). The HDMI and other sub-driver probes then
+	 * re-trigger this aggregate bind through component_add() on the shared
+	 * deferred-probe workqueue, hammering it and starving the panel's own
+	 * probe so the panel never registers -- the defer then never resolves.
+	 * Rate-limit the expensive rebind attempts so the workqueue stays free
+	 * long enough for the panel to probe; the following attempt succeeds.
+	 */
+	static unsigned long defer_backoff_until;
+
+	if (defer_backoff_until && time_before(jiffies, defer_backoff_until))
+		return -EPROBE_DEFER;
 
 	/* Remove existing drivers that may own the framebuffer memory. */
 	ret = drm_aperture_remove_framebuffers(&rockchip_drm_driver);
@@ -2482,8 +2497,11 @@ static int rockchip_drm_bind(struct device *dev)
 	rockchip_drm_create_properties(drm_dev);
 	/* Try to bind all sub drivers. */
 	ret = component_bind_all(dev, drm_dev);
-	if (ret)
+	if (ret) {
+		if (ret == -EPROBE_DEFER)
+			defer_backoff_until = jiffies + msecs_to_jiffies(100);
 		goto err_mode_config_cleanup;
+	}
 
 	rockchip_attach_connector_property(drm_dev);
 	ret = drm_vblank_init(drm_dev, drm_dev->mode_config.num_crtc);
