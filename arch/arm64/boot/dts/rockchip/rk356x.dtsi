@@ -1273,6 +1273,26 @@
 
 		clocks = <&scmi_clk 1>, <&cru CLK_GPU>;
 		clock-names = "gpu", "bus";
+		/* Static clock pin, NOT devfreq: v4 dropped operating-points-v2 to fix
+		 * the v2/v3 boot hang (see comment below), which also means panfrost
+		 * never touches this clock's rate again after boot - it's stuck at
+		 * whatever SCMI/ATF handed it at probe time (594MHz, confirmed via
+		 * dmesg), well under this GPU's known-good 800MHz (former OPP table's
+		 * top entry, and what track A's vendor kbase devfreq reaches under
+		 * load). Real-hardware symptom: EmulationStation's own menu/UI capped
+		 * at ~30fps on a 60Hz panel (exactly half - vsync-miss pattern, not a
+		 * graded slowdown) despite CPU governor forced to performance/max -
+		 * consistent with GPU-render-time being the bottleneck, not CPU.
+		 * assigned-clock-rates asks the clock core to set this once, during
+		 * early clock-tree init (of_clk_set_defaults()) - much earlier and
+		 * more deterministic than devfreq's later, load-triggered
+		 * clk_set_rate() call from panfrost_devfreq_target(), which is what
+		 * actually hung v2/v3. Real test of whether the SCMI backend refuses
+		 * rate-SET on this clock categorically, or only under that specific
+		 * later/async timing.
+		 */
+		assigned-clocks = <&scmi_clk 1>;
+		assigned-clock-rates = <800000000>;
 		power-domains = <&power RK3568_PD_GPU>;
 		#cooling-cells = <2>;
 		/* panfrost-enable branch only: deliberately NOT setting operating-points-v2.
