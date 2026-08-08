@@ -1266,27 +1266,59 @@
 		interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 41 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 40 IRQ_TYPE_LEVEL_HIGH>;
-		interrupt-names = "GPU", "MMU", "JOB";
+		interrupt-names = "gpu", "mmu", "job";
 
 		upthreshold = <40>;
 		downdifferential = <10>;
 
 		clocks = <&scmi_clk 1>, <&cru CLK_GPU>;
-		clock-names = "clk_mali", "clk_gpu";
+		clock-names = "gpu", "bus";
+		/* Static clock pin, NOT devfreq: v4 dropped operating-points-v2 to fix
+		 * the v2/v3 boot hang (see comment below), which also means panfrost
+		 * never touches this clock's rate again after boot - it's stuck at
+		 * whatever SCMI/ATF handed it at probe time (594MHz, confirmed via
+		 * dmesg), well under this GPU's known-good 800MHz (former OPP table's
+		 * top entry, and what track A's vendor kbase devfreq reaches under
+		 * load). Real-hardware symptom: EmulationStation's own menu/UI capped
+		 * at ~30fps on a 60Hz panel (exactly half - vsync-miss pattern, not a
+		 * graded slowdown) despite CPU governor forced to performance/max -
+		 * consistent with GPU-render-time being the bottleneck, not CPU.
+		 * assigned-clock-rates asks the clock core to set this once, during
+		 * early clock-tree init (of_clk_set_defaults()) - much earlier and
+		 * more deterministic than devfreq's later, load-triggered
+		 * clk_set_rate() call from panfrost_devfreq_target(), which is what
+		 * actually hung v2/v3. Real test of whether the SCMI backend refuses
+		 * rate-SET on this clock categorically, or only under that specific
+		 * later/async timing.
+		 */
+		assigned-clocks = <&scmi_clk 1>;
+		assigned-clock-rates = <800000000>;
 		power-domains = <&power RK3568_PD_GPU>;
 		#cooling-cells = <2>;
-		operating-points-v2 = <&gpu_opp_table>;
+		/* panfrost-enable branch only: deliberately NOT setting operating-points-v2.
+		 * v2/v3 both hung completely (no panic, no oops, dead on both UART and
+		 * HDMI) once an OPP table actually passed panfrost's devfreq init and it
+		 * started calling clk_set_rate() on pfdev->clock - which is positionally
+		 * the FIRST clock here (&scmi_clk 1), same one that's only ever been
+		 * *read* successfully so far ("clock rate = 594000000" in earlier dmesg).
+		 * Best working theory: the SCMI backend doesn't actually service rate-SET
+		 * requests for this clock the way it services rate-GET, and the SCMI
+		 * transport call blocks forever waiting on a response that never comes.
+		 * (The vendor kbase driver's own devfreq governor almost certainly drives
+		 * the clock differently - possibly the second, cru-backed CLK_GPU - which
+		 * is why GPU devfreq scaling has worked fine on track A/blob.)
+		 * Per panfrost_devfreq.c, devm_pm_opp_of_add_table() returns -ENODEV when
+		 * there's no operating-points-v2 property at all, and panfrost treats
+		 * that as "optional, continue without devfreq" (non-fatal) - unlike the
+		 * "-ENOENT / no supported OPPs" fatal path hit by the original
+		 * Rockchip-gated gpu_opp_table (see prior commit). Omitting the property
+		 * entirely is the only one of three attempts so far that doesn't either
+		 * fail outright (v1) or hang the whole board (v2/v3) - GPU runs at
+		 * whatever fixed clock it's already at, no DVFS, which is fine for A/B/C
+		 * comparison purposes (same as pinning powermode=highperformance).
+		 */
 
 		status = "disabled";
-		gpu_power_model: power-model {
-			compatible = "simple-power-model";
-			leakage-range= <5 15>;
-			ls = <(-24002) 22823 0>;
-			static-coefficient = <100000>;
-			dynamic-coefficient = <953>;
-			ts = <(-108890) 63610 (-1355) 20>;
-			thermal-zone = "gpu-thermal";
-		};
 	};
 
 	pvtm@fde80000 {
